@@ -302,7 +302,7 @@
 
         <!-- Video Player -->
         <div class="player-wrapper" id="playerContainer">
-            <video id="mainVideo" controls playsinline></video>
+            <video id="mainVideo" controls playsinline preload="auto"></video>
             <div class="empty-state" id="emptyState" onclick="document.getElementById('fileInput').click()">
                 <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polygon points="5 3 19 12 5 21 5 3"></polygon>
@@ -321,14 +321,14 @@
             <div class="info-card">
                 <h4>⚡ Direct Streaming Active</h4>
                 <p>
-                    Your Python backend directly pulls the raw MP4 stream from the CDN and proxies it locally with full byte-range support.
+                    The player checks the video source and relay, selects the faster responding route, and supports seeking.
                 </p>
             </div>
 
             <div class="info-card">
                 <h4>🚀 100% Ad-Free Playback</h4>
                 <p>
-                    No popups, no timer gates, and no app installs required. Streams play smoothly with full audio, seeking, and fullscreen controls.
+                    Playback has no added popups. Download pauses playback to give the download your available bandwidth. Source speed and browser codec support affect playback.
                 </p>
             </div>
 
@@ -451,13 +451,24 @@
             }
         }
 
+        // Free the playback connection and bandwidth before starting a download.
+        statusBox.addEventListener('click', event => {
+            if (event.target.closest('a[download]')) {
+                video.pause();
+                if (hls) { hls.destroy(); hls = null; }
+                video.removeAttribute('src');
+                video.load();
+                emptyState.style.display = 'flex';
+            }
+        });
+
         function loadVideoFromUrl(url) {
             emptyState.style.display = 'none';
 
             if (url.includes('.m3u8')) {
                 if (window.Hls && Hls.isSupported()) {
                     if (hls) hls.destroy();
-                    hls = new Hls();
+                    hls = new Hls({ maxBufferLength: 30, maxMaxBufferLength: 60 });
                     hls.loadSource(url);
                     hls.attachMedia(video);
                     hls.on(Hls.Events.MANIFEST_PARSED, () => {

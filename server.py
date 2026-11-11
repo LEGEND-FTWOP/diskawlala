@@ -5,11 +5,59 @@ import urllib.request
 import urllib.parse
 import os
 import re
-import errno
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 import urllib.error
 
 PORT = 8000
 DIRECTORY = os.path.dirname(os.path.abspath(__file__))
+
+def probe_stream(url):
+    """Bounded range check: reject HTML/error pages and measure actual media delivery."""
+    req = urllib.request.Request(url, headers={
+        'User-Agent': 'Mozilla/5.0', 'Range': 'bytes=0-16383',
+        'Accept-Encoding': 'identity'})
+    started = time.monotonic()
+    with urllib.request.urlopen(req, timeout=3) as resp:
+        kind = resp.headers.get('Content-Type', '').lower()
+        if resp.status not in (200, 206) or any(t in kind for t in ('text/html', 'application/json')):
+            raise ValueError('Source did not return media')
+        # Probe needs real bytes, not just fast response headers.
+        data = bytearray()
+        while len(data) < 16384:
+            if time.monotonic() - started > 3:
+                raise TimeoutError('Media sample too slow')
+            chunk = resp.read1(16384 - len(data))
+            if not chunk:
+                break
+            data.extend(chunk)
+        if not data:
+            raise ValueError('Empty stream')
+        total = resp.headers.get('Content-Range', '').rsplit('/', 1)[-1]
+        size = int(total) if total.isdigit() else 0
+        return url, size
+
+
+def choose_stream(candidates):
+    """Race a small sample from source and relay; never wait on the slow loser."""
+    candidates = list(dict.fromkeys(candidates))
+    pool = ThreadPoolExecutor(max_workers=len(candidates))
+    futures = [pool.submit(probe_stream, url) for url in candidates]
+    try:
+        for future in as_completed(futures, timeout=4):
+            try:
+                return future.result()
+            except Exception:
+                continue
+    except TimeoutError:
+        pass
+    finally:
+        for future in futures:
+            future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
+    # Some servers reject probes but accept normal video requests.
+    return candidates[0], 0
+
 
 def get_file_metadata(fid):
     """
@@ -71,7 +119,7 @@ def resolve_link(url):
         fid = file_id or url.split('/')[-1]
         
         # Step A: Fetch real file metadata with auto-unmasking
-        file_meta = get_file_metadata(fid)
+        file_meta = {'name': f'Diskwala_{fid}.mp4', 'size': 'Unknown', 'type': 'video/mp4'}
 
         # Step B: Fast check on extraction resolvers
         resolver_attempts = [
@@ -107,12 +155,17 @@ def resolve_link(url):
                                 direct_url = base_domain + data['url']
 
                         if direct_url:
-                            # Preserve the resolver's HTTPS relay instead of unwrapping it.
                             relay = urllib.parse.urljoin(res_url, data.get('url') or '')
                             base = urllib.parse.urlsplit(res_url)
                             parsed_relay = urllib.parse.urlsplit(relay)
-                            upstream = relay if (parsed_relay.netloc == base.netloc and parsed_relay.path == '/api/stream') else direct_url
-                            stream_path = f"/api/stream?url={urllib.parse.quote(upstream, safe='')}"
+                            candidates = [direct_url]
+                            if parsed_relay.netloc == base.netloc and parsed_relay.path == '/api/stream':
+                                candidates.append(relay)
+                            upstream, total_bytes = choose_stream(candidates)
+                            fallback = next((item for item in candidates if item != upstream), '')
+                            stream_path = '/api/stream?' + urllib.parse.urlencode({'url': upstream, 'fallback': fallback})
+                            if total_bytes:
+                                file_meta['size'] = round(total_bytes / (1024 * 1024), 2)
                             return {
                                 'success': True,
                                 'stream_url': stream_path,
@@ -189,7 +242,7 @@ class VideoServerHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(400, "Missing url parameter")
                 return
 
-            self.proxy_stream(target_url, qs.get('name', ['video.mp4'])[0] if qs.get('download') == ['1'] else None)
+            self.proxy_stream(target_url, qs.get('name', ['video.mp4'])[0] if qs.get('download') == ['1'] else None, qs.get('fallback', [''])[0])
             return
 
         super().do_GET()
@@ -217,13 +270,14 @@ class VideoServerHandler(http.server.SimpleHTTPRequestHandler):
         else:
             self.send_error(404, "Endpoint not found")
 
-    def proxy_stream(self, target_url, download_name=None):
+    def proxy_stream(self, target_url, download_name=None, fallback_url=None):
         if urllib.parse.urlsplit(target_url).scheme not in ('http', 'https'):
             self.send_error(400, 'Only HTTP(S) streams are supported')
             return
         headers_sent = False
         upstream_headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+            'Accept-Encoding': 'identity'
         }
         
         # Forward Range header for video seeking
@@ -232,8 +286,25 @@ class VideoServerHandler(http.server.SimpleHTTPRequestHandler):
             upstream_headers['Range'] = client_range
 
         try:
-            req = urllib.request.Request(target_url, headers=upstream_headers)
-            with urllib.request.urlopen(req, timeout=25) as resp:
+            # Retry the alternate route only before sending headers/body to the browser.
+            resp = None
+            for candidate in dict.fromkeys(filter(None, (target_url, fallback_url))):
+                if urllib.parse.urlsplit(candidate).scheme not in ('http', 'https'):
+                    continue
+                try:
+                    req = urllib.request.Request(candidate, headers=upstream_headers)
+                    resp = urllib.request.urlopen(req, timeout=10)
+                    if any(t in resp.headers.get('Content-Type', '').lower() for t in ('text/html', 'application/json')):
+                        resp.close()
+                        resp = None
+                        raise ValueError('Source returned a webpage instead of video')
+                    break
+                except Exception:
+                    if candidate == fallback_url or not fallback_url:
+                        raise
+            if resp is None:
+                raise ValueError('No usable stream route')
+            with resp:
                 self.send_response(resp.status)
                 if download_name:
                     self.send_header('Content-Disposition', "attachment; filename*=UTF-8''" + urllib.parse.quote(download_name, safe=''))
@@ -245,12 +316,15 @@ class VideoServerHandler(http.server.SimpleHTTPRequestHandler):
                         self.send_header(header_name, header_val)
 
                 self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Cache-Control', 'no-store')
                 self.end_headers()
 
                 headers_sent = True
                 # Stream chunks safely
                 while True:
-                    chunk = resp.read(64 * 1024)
+                    # read1 forwards available bytes immediately instead of waiting
+                    # for a full 64 KiB on a slow upstream.
+                    chunk = resp.read1(256 * 1024)
                     if not chunk:
                         break
                     self.wfile.write(chunk)
