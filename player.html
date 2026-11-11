@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clean Stream - Ad-Free Video Player</title>
+    <!-- HLS.js for m3u8 stream playback -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0c10;
+            --bg-secondary: #131722;
+            --bg-card: #181d2c;
+            --accent: #10b981;
+            --accent-hover: #059669;
+            --danger: #ef4444;
+            --danger-bg: rgba(239, 68, 68, 0.1);
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #242c3f;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px 16px;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 24px;
+            max-width: 720px;
+        }
+
+        .header h1 {
+            font-size: 1.85rem;
+            font-weight: 800;
+            color: #fff;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+
+        .badge {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            font-size: 0.75rem;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .header p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 900px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+        }
+
+        .input-group {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }
+
+        .url-input {
+            flex: 1;
+            min-width: 260px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: #fff;
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-size: 0.95rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .url-input:focus {
+            border-color: var(--accent);
+        }
+
+        .btn {
+            background: var(--accent);
+            color: #000;
+            font-weight: 700;
+            border: none;
+            padding: 12px 20px;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.2s;
+            text-decoration: none;
+        }
+
+        .btn:hover {
+            background: var(--accent-hover);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--text-main);
+            border: 1px solid var(--border);
+        }
+
+        .btn-outline:hover {
+            background: var(--bg-card);
+            border-color: var(--text-muted);
+        }
+
+        .status-box {
+            display: none;
+            padding: 16px 20px;
+            border-radius: 10px;
+            margin-bottom: 18px;
+            font-size: 0.92rem;
+            line-height: 1.5;
+        }
+
+        .status-box.error {
+            display: block;
+            background: var(--danger-bg);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #fca5a5;
+        }
+
+        .status-box.info {
+            display: block;
+            background: rgba(34, 158, 217, 0.1);
+            border: 1px solid rgba(34, 158, 217, 0.35);
+            color: #e0f2fe;
+        }
+
+        .status-box.success {
+            display: block;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.35);
+            color: #6ee7b7;
+        }
+
+        .player-wrapper {
+            position: relative;
+            width: 100%;
+            background: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            aspect-ratio: 16 / 9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--border);
+            margin-bottom: 20px;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            outline: none;
+        }
+
+        .empty-state {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            color: var(--text-muted);
+            text-align: center;
+            padding: 20px;
+            cursor: pointer;
+        }
+
+        .empty-state svg {
+            width: 48px;
+            height: 48px;
+            stroke: var(--accent);
+        }
+
+        .drop-zone {
+            border: 2px dashed var(--border);
+            padding: 18px;
+            border-radius: 12px;
+            text-align: center;
+            margin-bottom: 24px;
+            background: var(--bg-card);
+            cursor: pointer;
+            transition: border-color 0.2s, background 0.2s;
+        }
+
+        .drop-zone:hover, .drop-zone.dragover {
+            border-color: var(--accent);
+            background: rgba(16, 185, 129, 0.05);
+        }
+
+        .drop-zone p {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .drop-zone strong {
+            color: var(--text-main);
+        }
+
+        .explanation-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 16px;
+            margin-top: 14px;
+        }
+
+        .info-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 16px;
+        }
+
+        .info-card h4 {
+            color: #fff;
+            font-size: 0.95rem;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .info-card p {
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            line-height: 1.45;
+        }
+
+        .server-status {
+            display: inline-block;
+            font-size: 0.8rem;
+            padding: 3px 8px;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.08);
+            margin-bottom: 12px;
+        }
+
+        #fileInput {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>Clean Video Player <span class="badge">100% Ad-Free</span></h1>
+        <p>Stream direct video URLs, resolve Diskwala links, or drop local videos to play without ads.</p>
+    </div>
+
+    <div class="container">
+        <div id="backendNotice" class="server-status">
+            🐍 Python Backend: <span id="backendState" style="color: #facc15;">Checking...</span>
+        </div>
+
+        <!-- URL input -->
+        <div class="input-group">
+            <input type="text" id="videoUrlInput" class="url-input" placeholder="Paste direct video URL (.mp4, .m3u8) or Diskwala link..." />
+            <button class="btn" id="playBtn" onclick="handlePlayClick()">
+                ▶ Resolve & Play
+            </button>
+            <button class="btn btn-outline" onclick="document.getElementById('fileInput').click()">
+                📁 Choose File
+            </button>
+            <input type="file" id="fileInput" accept="video/*" onchange="handleFileSelect(event)">
+        </div>
+
+        <!-- Dynamic Status / Helper Box -->
+        <div id="statusBox" class="status-box"></div>
+
+        <!-- Video Player -->
+        <div class="player-wrapper" id="playerContainer">
+            <video id="mainVideo" controls playsinline></video>
+            <div class="empty-state" id="emptyState" onclick="document.getElementById('fileInput').click()">
+                <svg viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                </svg>
+                <p>Click to choose a video file or drag and drop one below</p>
+            </div>
+        </div>
+
+        <!-- Drag & Drop Zone -->
+        <div class="drop-zone" id="dropZone">
+            <p><strong>Drag & drop any video file here (.mp4, .mkv, .webm)</strong> to play with zero ads</p>
+        </div>
+
+        <!-- Technical Explanation and Options -->
+        <div class="explanation-grid">
+            <div class="info-card">
+                <h4>⚡ Direct Streaming Active</h4>
+                <p>
+                    Your Python backend directly pulls the raw MP4 stream from the CDN and proxies it locally with full byte-range support.
+                </p>
+            </div>
+
+            <div class="info-card">
+                <h4>🚀 100% Ad-Free Playback</h4>
+                <p>
+                    No popups, no timer gates, and no app installs required. Streams play smoothly with full audio, seeking, and fullscreen controls.
+                </p>
+            </div>
+
+            <div class="info-card">
+                <h4>📁 Offline Playback</h4>
+                <p>
+                    You can also drop any downloaded video file straight onto the player anytime to watch offline.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const video = document.getElementById('mainVideo');
+        const emptyState = document.getElementById('emptyState');
+        const dropZone = document.getElementById('dropZone');
+        const statusBox = document.getElementById('statusBox');
+        const backendState = document.getElementById('backendState');
+        const playBtn = document.getElementById('playBtn');
+        const videoUrlInput = document.getElementById('videoUrlInput');
+        let hls = null;
+        const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+        const BACKEND_URL = ['http:', 'https:'].includes(window.location.protocol) 
+            ? window.location.origin 
+            : 'http://127.0.0.1:8000';
+
+        // Allow pressing Enter key to resolve & play
+        videoUrlInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                handlePlayClick();
+            }
+        });
+
+        async function checkBackend() {
+            try {
+                const res = await fetch(`${BACKEND_URL}/api/resolve`, {
+                    method: 'OPTIONS',
+                    mode: 'cors'
+                });
+                if (!res.ok) throw new Error('Backend unavailable');
+                backendState.innerHTML = '<span style="color: #10b981;">Online</span>';
+            } catch (e) {
+                backendState.innerHTML = '<span style="color: #ef4444;">Offline (Run: <code>python server.py</code>)</span>';
+            }
+        }
+        checkBackend();
+
+        async function handlePlayClick() {
+            const rawUrl = videoUrlInput.value.trim();
+            if (!rawUrl) return;
+
+            statusBox.style.display = 'block';
+            statusBox.className = 'status-box info';
+            statusBox.innerHTML = '⏳ <strong>Resolving link and extracting stream...</strong>';
+            playBtn.disabled = true;
+
+            try {
+                const res = await fetch(`${BACKEND_URL}/api/resolve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: rawUrl }),
+                    mode: 'cors'
+                });
+
+                const data = await res.json();
+                playBtn.disabled = false;
+
+                if (data.success && data.stream_url) {
+                    statusBox.className = 'status-box success';
+                    const sizeText = data.size_mb ? ` (${data.size_mb} MB)` : '';
+                    const downloadBtn = data.download_url 
+                        ? `<a href="${escapeHtml(new URL(data.download_url, BACKEND_URL).href)}" target="_blank" download class="btn" style="padding: 6px 14px; font-size: 0.82rem; text-decoration: none; margin-left: auto;">⬇ Download</a>`
+                        : '';
+
+                    statusBox.innerHTML = `
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px;">
+                            <div>🎬 <strong>Now Playing:</strong> ${escapeHtml(data.filename || 'Video')}${escapeHtml(sizeText)}${data.is_preview ? ' — Resolver labels this as a preview; it may be incomplete.' : ''}</div>
+                            ${downloadBtn}
+                        </div>
+                    `;
+                    
+                    if (data.thumb) {
+                        video.poster = data.thumb;
+                    }
+
+                    // Attach backend host if it's a relative proxy path
+                    const streamUrl = data.stream_url.startsWith('http') 
+                        ? data.stream_url 
+                        : `${BACKEND_URL}${data.stream_url}`;
+                        
+                    loadVideoFromUrl(streamUrl);
+                } else if (data.locked) {
+                    statusBox.className = 'status-box info';
+                    statusBox.textContent = data.message;
+                    const originalLink = document.createElement('a');
+                    originalLink.href = data.app_url;
+                    originalLink.target = '_blank';
+                    originalLink.rel = 'noopener noreferrer';
+                    originalLink.className = 'btn btn-outline';
+                    originalLink.textContent = 'Open in Diskwala';
+                    statusBox.append(document.createElement('br'), originalLink);
+                } else {
+                    statusBox.className = 'status-box error';
+                    statusBox.textContent = data.message || data.error || 'Failed to resolve video stream.';
+                }
+            } catch (err) {
+                playBtn.disabled = false;
+                if (rawUrl.includes('.mp4') || rawUrl.includes('.m3u8')) {
+                    statusBox.style.display = 'none';
+                    loadVideoFromUrl(rawUrl);
+                } else {
+                    statusBox.className = 'status-box error';
+                    statusBox.innerHTML = `
+                        ⚠️ <strong>Python backend connection failed.</strong><br>
+                        Make sure <code>python server.py</code> is running in your terminal, then reload this page.
+                    `;
+                }
+            }
+        }
+
+        function loadVideoFromUrl(url) {
+            emptyState.style.display = 'none';
+
+            if (url.includes('.m3u8')) {
+                if (window.Hls && Hls.isSupported()) {
+                    if (hls) hls.destroy();
+                    hls = new Hls();
+                    hls.loadSource(url);
+                    hls.attachMedia(video);
+                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                        video.play().catch(e => console.log("Autoplay paused:", e));
+                    });
+                    hls.on(Hls.Events.ERROR, (event, data) => {
+                        if (data.fatal) showError("Failed to load HLS stream.");
+                    });
+                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                    video.src = url;
+                    video.play().catch(e => console.log("Autoplay paused:", e));
+                }
+            } else {
+                if (hls) {
+                    hls.destroy();
+                    hls = null;
+                }
+                video.src = url;
+                video.play().catch(err => {
+                    console.log("Autoplay paused (user interaction required):", err);
+                });
+            }
+        }
+
+        video.addEventListener('error', () => showError('Playback failed. Resolve the link again; the stream may have expired or use an unsupported codec.'));
+
+        function showError(msg) {
+            statusBox.style.display = 'block';
+            statusBox.className = 'status-box error';
+            statusBox.textContent = msg;
+            emptyState.style.display = 'flex';
+        }
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (file) {
+                playLocalFile(file);
+            }
+        }
+
+        function playLocalFile(file) {
+            if (hls) {
+                hls.destroy();
+                hls = null;
+            }
+            statusBox.style.display = 'none';
+            const fileUrl = URL.createObjectURL(file);
+            video.src = fileUrl;
+            emptyState.style.display = 'none';
+            video.play().catch(e => console.log("Autoplay paused:", e));
+        }
+
+        // Drag and drop handlers
+        ['dragenter', 'dragover'].forEach(name => {
+            dropZone.addEventListener(name, (e) => {
+                e.preventDefault();
+                dropZone.classList.add('dragover');
+            });
+        });
+
+        ['dragleave', 'drop'].forEach(name => {
+            dropZone.addEventListener(name, (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('dragover');
+            });
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            const files = e.dataTransfer.files;
+            if (files.length > 0 && files[0].type.startsWith('video/')) {
+                playLocalFile(files[0]);
+            }
+        });
+    </script>
+</body>
+</html>
